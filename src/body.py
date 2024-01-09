@@ -20,7 +20,7 @@ class Body(object):
         self.model.load_state_dict(model_dict)
         self.model.eval()
 
-    def __call__(self, oriImg):
+    def __call__(self, orig_img):
         # scale_search = [0.5, 1.0, 1.5, 2.0]
         scale_search = [0.5]
         boxsize = 368
@@ -28,13 +28,13 @@ class Body(object):
         padValue = 128
         thre1 = 0.1
         thre2 = 0.05
-        multiplier = [x * boxsize / oriImg.shape[0] for x in scale_search]
-        heatmap_avg = np.zeros((oriImg.shape[0], oriImg.shape[1], 19))
-        paf_avg = np.zeros((oriImg.shape[0], oriImg.shape[1], 38))
+        multiplier = [s * boxsize / orig_img.shape[0] for s in scale_search]
 
-        for m in range(len(multiplier)):
-            scale = multiplier[m]
-            imageToTest = cv2.resize(oriImg, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        heatmap_avg = np.zeros((orig_img.shape[0], orig_img.shape[1], 19))
+        paf_avg = np.zeros((orig_img.shape[0], orig_img.shape[1], 38))
+
+        for scale in multiplier:
+            imageToTest = cv2.resize(orig_img, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
             imageToTest_padded, pad = util.padRightDownCorner(imageToTest, stride, padValue)
             im = np.transpose(np.float32(imageToTest_padded[:, :, :, np.newaxis]), (3, 2, 0, 1)) / 256 - 0.5
             im = np.ascontiguousarray(im)
@@ -45,21 +45,37 @@ class Body(object):
             # data = data.permute([2, 0, 1]).unsqueeze(0).float()
             with torch.no_grad():
                 Mconv7_stage6_L1, Mconv7_stage6_L2 = self.model(data)
-            Mconv7_stage6_L1 = Mconv7_stage6_L1.cpu().numpy()
-            Mconv7_stage6_L2 = Mconv7_stage6_L2.cpu().numpy()
+
+            resize1 = transforms.Resize([data.shape[2], data.shape[3]], interpolation=transforms.InterpolationMode.NEAREST)
+            resize2 = transforms.Resize([orig_img.shape[0], orig_img.shape[1]], interpolation=transforms.InterpolationMode.NEAREST)
+
+            heatmap = torch.squeeze(Mconv7_stage6_L2)
+            heatmap = resize1(heatmap)
+            heatmap = heatmap[:imageToTest_padded.shape[0] - pad[2], :imageToTest_padded.shape[1] - pad[3], :]
+            heatmap = resize2(heatmap)
+            heatmap = torch.permute(heatmap, (1, 2, 0)).cpu().numpy()
+            
+            paf = torch.squeeze(Mconv7_stage6_L1)
+            paf = resize1(paf)
+            paf = paf[:imageToTest_padded.shape[0] - pad[2], :imageToTest_padded.shape[1] - pad[3], :]
+            paf = resize2(paf)
+            paf = torch.permute(paf, (1, 2, 0)).cpu().numpy()
+
+            # Mconv7_stage6_L1 = Mconv7_stage6_L1.cpu().numpy()
+            # Mconv7_stage6_L2 = Mconv7_stage6_L2.cpu().numpy()
 
             # extract outputs, resize, and remove padding
             # heatmap = np.transpose(np.squeeze(net.blobs[output_blobs.keys()[1]].data), (1, 2, 0))  # output 1 is heatmaps
-            heatmap = np.transpose(np.squeeze(Mconv7_stage6_L2), (1, 2, 0))  # output 1 is heatmaps
-            heatmap = cv2.resize(heatmap, (0, 0), fx=stride, fy=stride, interpolation=cv2.INTER_CUBIC)
-            heatmap = heatmap[:imageToTest_padded.shape[0] - pad[2], :imageToTest_padded.shape[1] - pad[3], :]
-            heatmap = cv2.resize(heatmap, (oriImg.shape[1], oriImg.shape[0]), interpolation=cv2.INTER_CUBIC)
+            # heatmap = np.transpose(np.squeeze(Mconv7_stage6_L2), (1, 2, 0))  # output 1 is heatmaps
+            # heatmap = cv2.resize(heatmap, (0, 0), fx=stride, fy=stride, interpolation=cv2.INTER_CUBIC)
+            # heatmap = heatmap[:imageToTest_padded.shape[0] - pad[2], :imageToTest_padded.shape[1] - pad[3], :]
+            # heatmap = cv2.resize(heatmap, (orig_img.shape[1], orig_img.shape[0]), interpolation=cv2.INTER_CUBIC)
 
             # paf = np.transpose(np.squeeze(net.blobs[output_blobs.keys()[0]].data), (1, 2, 0))  # output 0 is PAFs
-            paf = np.transpose(np.squeeze(Mconv7_stage6_L1), (1, 2, 0))  # output 0 is PAFs
-            paf = cv2.resize(paf, (0, 0), fx=stride, fy=stride, interpolation=cv2.INTER_CUBIC)
-            paf = paf[:imageToTest_padded.shape[0] - pad[2], :imageToTest_padded.shape[1] - pad[3], :]
-            paf = cv2.resize(paf, (oriImg.shape[1], oriImg.shape[0]), interpolation=cv2.INTER_CUBIC)
+            # paf = np.transpose(np.squeeze(Mconv7_stage6_L1), (1, 2, 0))  # output 0 is PAFs
+            # paf = cv2.resize(paf, (0, 0), fx=stride, fy=stride, interpolation=cv2.INTER_CUBIC)
+            # paf = paf[:imageToTest_padded.shape[0] - pad[2], :imageToTest_padded.shape[1] - pad[3], :]
+            # paf = cv2.resize(paf, (orig_img.shape[1], orig_img.shape[0]), interpolation=cv2.INTER_CUBIC)
 
             heatmap_avg += heatmap_avg + heatmap / len(multiplier)
             paf_avg += + paf / len(multiplier)
@@ -129,7 +145,7 @@ class Body(object):
 
                         score_midpts = np.multiply(vec_x, vec[0]) + np.multiply(vec_y, vec[1])
                         score_with_dist_prior = sum(score_midpts) / len(score_midpts) + min(
-                            0.5 * oriImg.shape[0] / norm - 1, 0)
+                            0.5 * orig_img.shape[0] / norm - 1, 0)
                         criterion1 = len(np.nonzero(score_midpts > thre2)[0]) > 0.8 * len(score_midpts)
                         criterion2 = score_with_dist_prior > 0
                         if criterion1 and criterion2:
@@ -211,8 +227,8 @@ if __name__ == "__main__":
     body_estimation = Body('../model/body_pose_model.pth')
 
     test_image = '../images/ski.jpg'
-    oriImg = cv2.imread(test_image)  # B,G,R order
-    candidate, subset = body_estimation(oriImg)
-    canvas = util.draw_bodypose(oriImg, candidate, subset)
+    orig_img = cv2.imread(test_image)  # B,G,R order
+    candidate, subset = body_estimation(orig_img)
+    canvas = util.draw_bodypose(orig_img, candidate, subset)
     plt.imshow(canvas[:, :, [2, 1, 0]])
     plt.show()
