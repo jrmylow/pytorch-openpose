@@ -55,21 +55,21 @@ def draw_bodypose(canvas, candidate, subset):
                 continue
             x, y = candidate[index][0:2]
             cv2.circle(canvas, (int(x), int(y)), 4, colors[i], thickness=-1)
-    for i in range(17):
-        for n in range(len(subset)):
-            index = subset[n][np.array(limbSeq[i]) - 1]
-            if -1 in index:
-                continue
-            cur_canvas = canvas.copy()
-            Y = candidate[index.astype(int), 0]
-            X = candidate[index.astype(int), 1]
-            mX = np.mean(X)
-            mY = np.mean(Y)
-            length = ((X[0] - X[1]) ** 2 + (Y[0] - Y[1]) ** 2) ** 0.5
-            angle = math.degrees(math.atan2(X[0] - X[1], Y[0] - Y[1]))
-            polygon = cv2.ellipse2Poly((int(mY), int(mX)), (int(length / 2), stickwidth), int(angle), 0, 360, 1)
-            cv2.fillConvexPoly(cur_canvas, polygon, colors[i])
-            canvas = cv2.addWeighted(canvas, 0.4, cur_canvas, 0.6, 0)
+    # for i in range(17):
+    #     for n in range(len(subset)):
+    #         index = subset[n][np.array(limbSeq[i]) - 1]
+    #         if -1 in index:
+    #             continue
+    #         cur_canvas = canvas.copy()
+    #         Y = candidate[index.astype(int), 0]
+    #         X = candidate[index.astype(int), 1]
+    #         mX = np.mean(X)
+    #         mY = np.mean(Y)
+    #         length = ((X[0] - X[1]) ** 2 + (Y[0] - Y[1]) ** 2) ** 0.5
+    #         angle = math.degrees(math.atan2(X[0] - X[1], Y[0] - Y[1]))
+    #         polygon = cv2.ellipse2Poly((int(mY), int(mX)), (int(length / 2), stickwidth), int(angle), 0, 360, 1)
+    #         cv2.fillConvexPoly(cur_canvas, polygon, colors[i])
+    #         canvas = cv2.addWeighted(canvas, 0.4, cur_canvas, 0.6, 0)
     # plt.imsave("preview.jpg", canvas[:, :, [2, 1, 0]])
     # plt.imshow(canvas[:, :, [2, 1, 0]])
     return canvas

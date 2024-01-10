@@ -12,6 +12,9 @@ from src import util
 from src.model import bodypose_model
 
 class Body(object):
+
+
+
     def __init__(self, model_path):
         self.model = bodypose_model()
         if torch.cuda.is_available():
@@ -30,6 +33,27 @@ class Body(object):
         thre2 = 0.05
         multiplier = [s * boxsize / orig_img.shape[0] for s in scale_search]
 
+        # find connection in the specified sequence, center 29 is in the position 15
+        limbSeq = [[2, 3], [2, 6], [3, 4], [4, 5], [6, 7], [7, 8], [2, 9], [9, 10], \
+                    [10, 11], [2, 12], [12, 13], [13, 14], [2, 1], [1, 15], [15, 17], \
+                    [1, 16], [16, 18], [3, 17], [6, 18]]
+        # the middle joints heatmap correpondence
+        mapIdx = [[31, 32], [39, 40], [33, 34], [35, 36], [41, 42], [43, 44], [19, 20], [21, 22], \
+                    [23, 24], [25, 26], [27, 28], [29, 30], [47, 48], [49, 50], [53, 54], [51, 52], \
+                    [55, 56], [37, 38], [45, 46]]
+
+
+        heatmap_avg, paf_avg = self.get_maps(orig_img, multiplier, stride, padValue)
+        all_peaks, peak_counter = self.get_peaks(heatmap_avg, thre1)
+        connection_all, special_k = self.process_peaks(orig_img, paf_avg, all_peaks, mapIdx, limbSeq, thre2)
+        candidate, subset = self.process_connections(all_peaks, connection_all, special_k, mapIdx, limbSeq)
+
+
+        # subset: n*20 array, 0-17 is the index in candidate, 18 is the total score, 19 is the total parts
+        # candidate: x, y, score, id
+        return candidate, subset
+
+    def get_maps(self, orig_img, multiplier, stride, padValue):
         heatmap_avg = np.zeros((orig_img.shape[0], orig_img.shape[1], 19))
         paf_avg = np.zeros((orig_img.shape[0], orig_img.shape[1], 38))
 
@@ -49,37 +73,41 @@ class Body(object):
             resize1 = transforms.Resize([data.shape[2], data.shape[3]], interpolation=transforms.InterpolationMode.NEAREST)
             resize2 = transforms.Resize([orig_img.shape[0], orig_img.shape[1]], interpolation=transforms.InterpolationMode.NEAREST)
 
-            heatmap = torch.squeeze(Mconv7_stage6_L2)
-            heatmap = resize1(heatmap)
-            heatmap = heatmap[:imageToTest_padded.shape[0] - pad[2], :imageToTest_padded.shape[1] - pad[3], :]
-            heatmap = resize2(heatmap)
-            heatmap = torch.permute(heatmap, (1, 2, 0)).cpu().numpy()
-            
-            paf = torch.squeeze(Mconv7_stage6_L1)
-            paf = resize1(paf)
-            paf = paf[:imageToTest_padded.shape[0] - pad[2], :imageToTest_padded.shape[1] - pad[3], :]
-            paf = resize2(paf)
-            paf = torch.permute(paf, (1, 2, 0)).cpu().numpy()
 
-            # Mconv7_stage6_L1 = Mconv7_stage6_L1.cpu().numpy()
-            # Mconv7_stage6_L2 = Mconv7_stage6_L2.cpu().numpy()
+            if False:
+                heatmap = torch.squeeze(Mconv7_stage6_L2)
+                heatmap = resize1(heatmap)
+                heatmap = heatmap[:imageToTest_padded.shape[0] - pad[2], :imageToTest_padded.shape[1] - pad[3], :]
+                heatmap = resize2(heatmap)
+                heatmap = torch.permute(heatmap, (1, 2, 0)).cpu().numpy()
+                
+                paf = torch.squeeze(Mconv7_stage6_L1)
+                paf = resize1(paf)
+                paf = paf[:imageToTest_padded.shape[0] - pad[2], :imageToTest_padded.shape[1] - pad[3], :]
+                paf = resize2(paf)
+                paf = torch.permute(paf, (1, 2, 0)).cpu().numpy()
+            else:
+                Mconv7_stage6_L1, Mconv7_stage6_L2 = (Mconv7_stage6_L1.cpu().numpy(), Mconv7_stage6_L2.cpu().numpy())
 
-            # extract outputs, resize, and remove padding
-            # heatmap = np.transpose(np.squeeze(net.blobs[output_blobs.keys()[1]].data), (1, 2, 0))  # output 1 is heatmaps
-            # heatmap = np.transpose(np.squeeze(Mconv7_stage6_L2), (1, 2, 0))  # output 1 is heatmaps
-            # heatmap = cv2.resize(heatmap, (0, 0), fx=stride, fy=stride, interpolation=cv2.INTER_CUBIC)
-            # heatmap = heatmap[:imageToTest_padded.shape[0] - pad[2], :imageToTest_padded.shape[1] - pad[3], :]
-            # heatmap = cv2.resize(heatmap, (orig_img.shape[1], orig_img.shape[0]), interpolation=cv2.INTER_CUBIC)
+                # extract outputs, resize, and remove padding
+                # heatmap = np.transpose(np.squeeze(net.blobs[output_blobs.keys()[1]].data), (1, 2, 0))  # output 1 is heatmaps
+                heatmap = np.transpose(np.squeeze(Mconv7_stage6_L2), (1, 2, 0))  # output 1 is heatmaps
+                heatmap = cv2.resize(heatmap, (0, 0), fx=stride, fy=stride, interpolation=cv2.INTER_CUBIC)
+                heatmap = heatmap[:imageToTest_padded.shape[0] - pad[2], :imageToTest_padded.shape[1] - pad[3], :]
+                heatmap = cv2.resize(heatmap, (orig_img.shape[1], orig_img.shape[0]), interpolation=cv2.INTER_CUBIC)
 
-            # paf = np.transpose(np.squeeze(net.blobs[output_blobs.keys()[0]].data), (1, 2, 0))  # output 0 is PAFs
-            # paf = np.transpose(np.squeeze(Mconv7_stage6_L1), (1, 2, 0))  # output 0 is PAFs
-            # paf = cv2.resize(paf, (0, 0), fx=stride, fy=stride, interpolation=cv2.INTER_CUBIC)
-            # paf = paf[:imageToTest_padded.shape[0] - pad[2], :imageToTest_padded.shape[1] - pad[3], :]
-            # paf = cv2.resize(paf, (orig_img.shape[1], orig_img.shape[0]), interpolation=cv2.INTER_CUBIC)
+                # paf = np.transpose(np.squeeze(net.blobs[output_blobs.keys()[0]].data), (1, 2, 0))  # output 0 is PAFs
+                paf = np.transpose(np.squeeze(Mconv7_stage6_L1), (1, 2, 0))  # output 0 is PAFs
+                paf = cv2.resize(paf, (0, 0), fx=stride, fy=stride, interpolation=cv2.INTER_CUBIC)
+                paf = paf[:imageToTest_padded.shape[0] - pad[2], :imageToTest_padded.shape[1] - pad[3], :]
+                paf = cv2.resize(paf, (orig_img.shape[1], orig_img.shape[0]), interpolation=cv2.INTER_CUBIC)
 
-            heatmap_avg += heatmap_avg + heatmap / len(multiplier)
-            paf_avg += + paf / len(multiplier)
+            heatmap_avg = heatmap_avg + heatmap / len(multiplier)
+            paf_avg = paf_avg + paf / len(multiplier)
 
+        return heatmap_avg, paf_avg
+
+    def get_peaks(self, heatmap_avg, thre1):
         all_peaks = []
         peak_counter = 0
 
@@ -99,22 +127,17 @@ class Body(object):
             peaks_binary = np.logical_and.reduce(
                 (one_heatmap >= map_left, one_heatmap >= map_right, one_heatmap >= map_up, one_heatmap >= map_down, one_heatmap > thre1))
             peaks = list(zip(np.nonzero(peaks_binary)[1], np.nonzero(peaks_binary)[0]))  # note reverse
-            peaks_with_score = [x + (map_ori[x[1], x[0]],) for x in peaks]
+            peaks_with_score = (x + (map_ori[x[1], x[0]],) for x in peaks)
             peak_id = range(peak_counter, peak_counter + len(peaks))
-            peaks_with_score_and_id = [peaks_with_score[i] + (peak_id[i],) for i in range(len(peak_id))]
+            peaks_with_score_and_id = [peak + (pid,) for peak, pid in zip(peaks_with_score, peak_id)]
 
             all_peaks.append(peaks_with_score_and_id)
             peak_counter += len(peaks)
 
-        # find connection in the specified sequence, center 29 is in the position 15
-        limbSeq = [[2, 3], [2, 6], [3, 4], [4, 5], [6, 7], [7, 8], [2, 9], [9, 10], \
-                   [10, 11], [2, 12], [12, 13], [13, 14], [2, 1], [1, 15], [15, 17], \
-                   [1, 16], [16, 18], [3, 17], [6, 18]]
-        # the middle joints heatmap correpondence
-        mapIdx = [[31, 32], [39, 40], [33, 34], [35, 36], [41, 42], [43, 44], [19, 20], [21, 22], \
-                  [23, 24], [25, 26], [27, 28], [29, 30], [47, 48], [49, 50], [53, 54], [51, 52], \
-                  [55, 56], [37, 38], [45, 46]]
+        return all_peaks, peak_counter
 
+
+    def process_peaks(self, orig_img, paf_avg, all_peaks, mapIdx, limbSeq, thre2):
         connection_all = []
         special_k = []
         mid_num = 10
@@ -165,9 +188,12 @@ class Body(object):
             else:
                 special_k.append(k)
                 connection_all.append([])
+        return connection_all, special_k
 
+    def process_connections(self, all_peaks, connection_all, special_k, mapIdx, limbSeq):
         # last number in each row is the total parts number of that person
         # the second last number in each row is the score of the overall configuration
+
         subset = -1 * np.ones((0, 20))
         candidate = np.array([item for sublist in all_peaks for item in sublist])
 
@@ -218,9 +244,6 @@ class Body(object):
             if subset[i][-1] < 4 or subset[i][-2] / subset[i][-1] < 0.4:
                 deleteIdx.append(i)
         subset = np.delete(subset, deleteIdx, axis=0)
-
-        # subset: n*20 array, 0-17 is the index in candidate, 18 is the total score, 19 is the total parts
-        # candidate: x, y, score, id
         return candidate, subset
 
 if __name__ == "__main__":
